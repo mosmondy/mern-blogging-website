@@ -4,18 +4,30 @@ import 'dotenv/config';
 import bcrypt from 'bcrypt';
 import { nanoid } from 'nanoid';
 
+import admin from 'firebase-admin';
+
 import jwt from 'jsonwebtoken';
+// import cors to enable the server except requests from react host 5173 not only 3000
+import cors from 'cors';
 
 // schema row
 import User from './Schema/User.js';
+import serviceAccountKey from './azarea.json' assert { type: 'json' };
+import { getAuth } from 'firebase-admin/auth';
 
 const server = express();
 let PORT = 3000;
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccountKey),
+});
 
 let emailRegex = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/; // regex for email
 let passwordRegex = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z]).{6,20}$/; // regex for password
 
 server.use(express.json());
+// cors will enable server to except data from anywhere
+server.use(cors());
 
 mongoose.connect(process.env.DB_LOCATION, {
   autoIndex: true,
@@ -27,6 +39,7 @@ const formatDatatoSend = (user) => {
     { id: user._id },
     process.env.SECRET_ACCESS_KEY
   );
+
   return {
     access_token,
     profile_img: user.personal_info.profile_img,
@@ -35,6 +48,8 @@ const formatDatatoSend = (user) => {
     // password: user.personal_info.hashed_password,
   };
 };
+
+console.log(formatDatatoSend);
 
 // check duplicate usernames
 const generateUsername = async (email) => {
@@ -140,7 +155,7 @@ server.post('/signin', (req, res) => {
         }
       });
 
-      // console.log(user);
+      console.log(user);
       // return res.json({ status: 'got user document' });
     })
 
@@ -148,6 +163,123 @@ server.post('/signin', (req, res) => {
     .catch((err) => {
       console.log(err.message);
       return res.status(500).json({ error: err.message });
+    });
+});
+
+// sending google auth dets to our server
+// async because we request google server to verify access token
+server.post('/google-auth', async (req, res) => {
+  // let { access_token } = req.body;
+  let { access_token } = req.body;
+
+  // console.log('Access Token:', access_token);
+  // console.log('req:', req);
+
+  // console.log(req.body);
+
+  // verify token from google
+  console.log('Received access token:', access_token);
+  getAuth()
+    .verifyIdToken(access_token)
+    .then(async (decodedUser) => {
+      // store the data in db
+
+      let { email, name, picture } = decodedUser;
+
+      // high resolution icon from google
+      picture = picture.replace('s96-c', 's384-c');
+
+      // save user to db, check first if user exists
+      let user = await User.findOne({ 'personal_info.email': email })
+        .select(
+          'personal_info.fullname personal_info.username personal_info.profile_img google_auth'
+        )
+        .then((u) => {
+          // so if the user exists in the db return that user details if the user is null we sign up the user(create user in the db)
+          return u || null;
+        })
+
+        .catch((err) => {
+          return res.status(500).json({ error: err.message });
+        });
+
+      if (user) {
+        // This block will not execute if user is found
+
+        if (!user.google_auth) {
+          return res.status(403).json({
+            error:
+              'This email was signed up without google. Please login in to Azarea with email and password.',
+          });
+        } else {
+          // User exists and signed up with Google, proceed to login
+          return res.status(200).json(formatDatatoSend(user));
+        }
+      } else {
+        // New user creation should happen here, outside the if (user) block
+        let username = await generateUsername(email);
+
+        user = new User({
+          google_auth: true,
+
+          personal_info: {
+            fullname: name,
+            email,
+            profile_img: picture,
+            username,
+          },
+        });
+
+        await user
+          .save()
+          .then((u) => {
+            user = u;
+          })
+          .catch((err) => {
+            return res.status(500).json({ error: err.message });
+          });
+      }
+
+      // if (user) {
+      //   // if users google email was already in the database, then they cannot sign up using that email
+      //   if (!user.google_auth) {
+      //     return res.status(403).json({
+      //       error:
+      //         'This email was signed up without google. Please login in to Azarea with email and password.',
+      //     });
+      //   } else {
+      //     // sign up for the first time using google
+      //     let username = await generateUsername(email);
+
+      //     user = new User({
+      //       personal_info: {
+      //         fullname: name,
+      //         email,
+      //         profile_img: picture,
+      //         username,
+      //         google_auth: true,
+      //       },
+      //     });
+
+      //     await user
+      //       .save()
+      //       .then((u) => {
+      //         user = u;
+      //       })
+      //       .catch((err) => {
+      //         return res.status(500).json({ error: err.message });
+      //       });
+      //   }
+      // }
+
+      return res.status(200).json(formatDatatoSend(user));
+    })
+    .catch((e) => {
+      return res.status(500).json({
+        error:
+          'Failed to Authenticate you with Google. Please try again, or change the google account: azarea',
+      });
+      console.log(e);
     });
 });
 

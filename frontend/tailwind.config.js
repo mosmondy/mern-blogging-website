@@ -28,6 +28,7 @@ export default {
         inter: ["'Inter'", 'sans-serif'],
         gelasio: ["'Gelasio'", 'serif'],
         poppins: ['Poppins', 'sans-serif'],
+        nytCheltenham: ['var(--nyt-cheltenham-font)'],
       },
     },
   },
